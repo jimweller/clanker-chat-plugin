@@ -134,6 +134,9 @@ def breaches_for(arm, meta, output, output_style):
     if arm == "with":
         if meta["plugins"] != ["clanker-chat"]:
             found.append(f"plugins {meta['plugins']} is not ['clanker-chat']")
+        # The installed copy carries the same name, so only the path tells it from this clone.
+        if meta["plugins"] and meta["plugin_paths"] != [meta["plugin_dir"]]:
+            found.append(f"plugin loaded from {meta['plugin_paths']}, not {meta['plugin_dir']}")
         if not meta["hook_fired"].get("SessionStart"):
             found.append("SessionStart hook did not fire")
         if not meta["hook_fired"].get("UserPromptSubmit"):
@@ -163,10 +166,11 @@ def call_api(prompt, options, context, runner=None, environ=None, settings_path=
     meta = {"arm": arm}
     try:
         model = check_alias(environ.get("EVAL_MODEL") or "opus")
-        argv = build_argv(arm, model, config.get("plugin_dir", PLUGIN_ROOT), output_style)
+        plugin_dir = str(pathlib.Path(config.get("plugin_dir", PLUGIN_ROOT)).resolve())
+        argv = build_argv(arm, model, plugin_dir, output_style)
     except ValueError as e:
         return {"error": f"WRITER_ERROR: {e}", "metadata": meta}
-    meta.update({"model": model, "argv": argv})
+    meta.update({"model": model, "argv": argv, "plugin_dir": plugin_dir})
     settings = read_settings_env(settings_path or pathlib.Path.home() / ".claude" / "settings.json")
     env = child_env(environ, settings)
     cwd = tempfile.mkdtemp(prefix="writer-")
@@ -185,6 +189,7 @@ def call_api(prompt, options, context, runner=None, environ=None, settings_path=
     meta.update({
         "output_style": init.get("output_style"),
         "plugins": [p.get("name") for p in init.get("plugins") or []],
+        "plugin_paths": [p.get("path") for p in init.get("plugins") or []],
         "tools": init.get("tools") or [],
         "mcp_servers": init.get("mcp_servers") or [],
         "hook_events": hook_events,

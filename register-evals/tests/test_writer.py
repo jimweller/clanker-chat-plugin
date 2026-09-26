@@ -13,8 +13,8 @@ RULES = str(SUITE.parent / "rules" / "clanker-register.md")
 STYLE = "clanker-chat:Clanker"
 
 
-def init(plugins=("clanker-chat",), style=STYLE, tools=("Read",), mcp=()):
-    return {"type": "system", "subtype": "init", "plugins": [{"name": p, "path": "/x"} for p in plugins],
+def init(plugins=("clanker-chat",), style=STYLE, tools=("Read",), mcp=(), path=None):
+    return {"type": "system", "subtype": "init", "plugins": [{"name": p, "path": path or str(writer.PLUGIN_ROOT)} for p in plugins],
             "output_style": style, "tools": list(tools), "mcp_servers": list(mcp), "skills": []}
 
 
@@ -155,6 +155,13 @@ class WithArmTest(unittest.TestCase):
 
     def test_missing_plugin(self):
         self.assertBreach(stream(hook("SessionStart"), init(plugins=()), hook("UserPromptSubmit"), read(), result()), "plugin")
+
+    def test_a_plugin_loaded_from_outside_the_clone_is_a_breach(self):
+        # The installed copy carries the same name, so only the path tells it from the clone.
+        cache = "/Users/x/.claude/plugins/cache/jimweller/clanker-chat/0.3.0"
+        r = self.assertBreach(stream(hook("SessionStart"), init(path=cache), hook("UserPromptSubmit"), read(), result()), "plugins/cache")
+        self.assertEqual(r["metadata"]["plugin_paths"], [cache])
+        self.assertEqual(r["metadata"]["plugin_dir"], str(writer.PLUGIN_ROOT))
 
     def test_missing_session_start_hook(self):
         self.assertBreach(stream(init(), hook("UserPromptSubmit"), read(), result()), "SessionStart")
