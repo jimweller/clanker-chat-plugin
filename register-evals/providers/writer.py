@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 
 ALIASES = ("haiku", "sonnet", "opus", "fable")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_STYLE = "clanker-chat:Clanker"
 RULES_SUFFIX = "rules/clanker-register.md"
@@ -45,11 +46,24 @@ def check_alias(model):
     return model
 
 
-def read_settings_env(path):
+def read_settings(path):
     p = pathlib.Path(path)
     if not p.is_file():
         return {}
-    return json.loads(p.read_text()).get("env", {})
+    return json.loads(p.read_text())
+
+
+def effort_for(model, settings, environ):
+    """The effort a real session gives this alias. --setting-sources "" drops modelSettings,
+    so the writer resolves it the same way: alias to model id, model id to effortLevel."""
+    effort = environ.get("EVAL_EFFORT")
+    if effort is None:
+        key = f"ANTHROPIC_DEFAULT_{model.upper()}_MODEL"
+        model_id = ((settings.get("env") or {}).get(key) or environ.get(key) or "").split("[")[0]
+        effort = ((settings.get("modelSettings") or {}).get(model_id) or {}).get("effortLevel")
+    if effort not in EFFORTS:
+        raise ValueError(f"no effort for {model!r}, set EVAL_EFFORT or modelSettings effortLevel to one of {', '.join(EFFORTS)}, got {effort!r}")
+    return effort
 
 
 def child_env(parent, settings_env):
@@ -62,7 +76,7 @@ def child_env(parent, settings_env):
     return env
 
 
-def build_argv(arm, model, plugin_root, output_style):
+def build_argv(arm, model, plugin_root, output_style, effort):
     argv = ["-p", "--setting-sources", "", "--output-format", "stream-json", "--verbose", "--include-hook-events",
             "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--tools", "Bash,Read", "--permission-mode", "dontAsk"]
     if arm == "with":
@@ -72,7 +86,7 @@ def build_argv(arm, model, plugin_root, output_style):
     else:
         raise ValueError(f"unknown arm {arm!r}, expected 'with' or 'baseline'")
     # --allowedTools is variadic, so a non-variadic flag must follow it.
-    return argv + ["--model", check_alias(model), "--no-session-persistence"]
+    return argv + ["--model", check_alias(model), "--effort", effort, "--no-session-persistence"]
 
 
 def text_of(value):
@@ -166,13 +180,14 @@ def call_api(prompt, options, context, runner=None, environ=None, settings_path=
     meta = {"arm": arm}
     try:
         model = check_alias(environ.get("EVAL_MODEL") or "opus")
+        settings = read_settings(settings_path or pathlib.Path.home() / ".claude" / "settings.json")
+        effort = effort_for(model, settings, environ)
         plugin_dir = str(pathlib.Path(config.get("plugin_dir", PLUGIN_ROOT)).resolve())
-        argv = build_argv(arm, model, plugin_dir, output_style)
+        argv = build_argv(arm, model, plugin_dir, output_style, effort)
     except ValueError as e:
         return {"error": f"WRITER_ERROR: {e}", "metadata": meta}
-    meta.update({"model": model, "argv": argv, "plugin_dir": plugin_dir})
-    settings = read_settings_env(settings_path or pathlib.Path.home() / ".claude" / "settings.json")
-    env = child_env(environ, settings)
+    meta.update({"model": model, "effort": effort, "argv": argv, "plugin_dir": plugin_dir})
+    env = child_env(environ, settings.get("env", {}))
     cwd = tempfile.mkdtemp(prefix="writer-")
     try:
         code, stdout, stderr, timed_out = runner(argv, input=prompt, cwd=cwd, env=env,

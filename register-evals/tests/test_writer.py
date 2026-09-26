@@ -10,6 +10,11 @@ sys.path.insert(0, str(SUITE / "providers"))
 import writer  # noqa: E402
 
 RULES = str(SUITE.parent / "rules" / "clanker-register.md")
+SETTINGS = {"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]", "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"},
+            "modelSettings": {"claude-opus-5-5": {"effortLevel": "xhigh"}, "claude-sonnet-5": {"effortLevel": "high"}}}
+with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as _f:
+    json.dump(SETTINGS, _f)
+SETTINGS_FILE = _f.name
 STYLE = "clanker-chat:Clanker"
 
 
@@ -59,15 +64,15 @@ class FakeRunner:
         return self.code, self.stdout, "", self.timed_out
 
 
-def call(arm, runner, environ=None, **config):
+def call(arm, runner, environ=None, settings_path=SETTINGS_FILE, **config):
     options = {"config": {"arm": arm, **config}}
     return writer.call_api("What does git rebase -i do?", options, {"vars": {}}, runner=runner,
-                           environ=environ if environ is not None else {"PATH": "/bin", "HOME": "/h"}, settings_path="/no/such/settings.json")
+                           environ=environ if environ is not None else {"PATH": "/bin", "HOME": "/h"}, settings_path=settings_path)
 
 
 class ArgvTest(unittest.TestCase):
     def test_with_arm_loads_the_plugin_style_and_may_read_the_contract(self):
-        argv = writer.build_argv("with", "opus", "/plugin", STYLE)
+        argv = writer.build_argv("with", "opus", "/plugin", STYLE, "xhigh")
         self.assertNotIn("--bare", argv)
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
         self.assertEqual(argv[argv.index("--plugin-dir") + 1], "/plugin")
@@ -84,7 +89,7 @@ class ArgvTest(unittest.TestCase):
         # An empty tool set made the baseline writer print fake tool-call markup on an
         # action request and repeat it until the output limit, so both arms get the same
         # Bash and Read under dontAsk, which runs read-only commands and denies the rest.
-        argv = writer.build_argv("baseline", "opus", "/plugin", STYLE)
+        argv = writer.build_argv("baseline", "opus", "/plugin", STYLE, "xhigh")
         self.assertNotIn("--plugin-dir", argv)
         self.assertNotIn("--settings", argv)
         self.assertNotIn("--allowedTools", argv)
@@ -93,7 +98,7 @@ class ArgvTest(unittest.TestCase):
 
     def test_unknown_arm_is_refused(self):
         with self.assertRaises(ValueError):
-            writer.build_argv("both", "opus", "/plugin", STYLE)
+            writer.build_argv("both", "opus", "/plugin", STYLE, "xhigh")
 
     def test_only_aliases_are_models(self):
         self.assertEqual(writer.check_alias("sonnet"), "sonnet")
@@ -114,7 +119,35 @@ class EnvTest(unittest.TestCase):
             self.assertNotIn(k, env)
 
     def test_missing_settings_file_is_empty(self):
-        self.assertEqual(writer.read_settings_env("/no/such/file.json"), {})
+        self.assertEqual(writer.read_settings("/no/such/file.json"), {})
+
+
+class EffortTest(unittest.TestCase):
+    # --setting-sources "" drops modelSettings, so the writer passes the effort a real session would use.
+    def test_effort_comes_from_the_model_settings_real_sessions_use(self):
+        self.assertEqual(writer.effort_for("opus", SETTINGS, {}), "xhigh")
+        self.assertEqual(writer.effort_for("sonnet", SETTINGS, {}), "high")
+
+    def test_eval_effort_overrides_the_settings(self):
+        self.assertEqual(writer.effort_for("opus", SETTINGS, {"EVAL_EFFORT": "low"}), "low")
+
+    def test_a_model_with_no_effort_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, "effort"):
+            writer.effort_for("haiku", SETTINGS, {})
+        with self.assertRaisesRegex(ValueError, "effort"):
+            writer.effort_for("opus", SETTINGS, {"EVAL_EFFORT": "extreme"})
+
+    def test_both_arms_run_at_that_effort(self):
+        for arm, stdout in (("with", with_arm_ok()), ("baseline", baseline_ok())):
+            runner = FakeRunner(stdout)
+            r = call(arm, runner)
+            argv = runner.calls[0]["argv"]
+            self.assertEqual(argv[argv.index("--effort") + 1], "xhigh")
+            self.assertEqual(r["metadata"]["effort"], "xhigh")
+
+    def test_no_settings_and_no_override_is_a_writer_error(self):
+        r = call("with", FakeRunner(with_arm_ok()), settings_path="/no/such/settings.json")
+        self.assertRegex(r["error"], r"^WRITER_ERROR: .*effort")
 
 
 class WithArmTest(unittest.TestCase):
