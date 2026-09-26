@@ -38,7 +38,7 @@ test('settings resolve env over config over defaults, and name the source', () =
   const s = resolveSettings({ passes: 3, model: 'sonnet' }, { JUDGE_PASSES: '5' });
   assert.deepEqual(s.passes, { value: 5, source: 'env' });
   assert.deepEqual(s.model, { value: 'sonnet', source: 'config' });
-  assert.deepEqual(s.effort, { value: 'medium', source: 'default' });
+  assert.deepEqual(s.effort, { value: 'high', source: 'default' });
   assert.deepEqual(s.retries, { value: 0, source: 'default' });
 });
 
@@ -50,7 +50,7 @@ test('a register row runs P passes over the rendered catalog and reply', async (
     assert.ok(c.prompt.includes(CATALOG.text));
     assert.ok(c.prompt.includes('the reply'));
     assert.equal(c.model, 'opus');
-    assert.equal(c.effort, 'medium');
+    assert.equal(c.effort, 'high');
     assert.deepEqual(c.schema.properties.findings.items.properties.rule.enum, ['CR-a', 'CR-b']);
   }
   assert.equal(r.pass, true);
